@@ -1,0 +1,121 @@
+use std::net::{TcpListener, TcpStream};
+use std::io::{stdin, stdout, Write, Read, BufReader, BufRead, ErrorKind, self};
+use std::fs::File;
+
+fn initsetup() -> Vec<String> {
+    let mut usersraw = String::new();
+    stdin().read_line(&mut usersraw).expect("Failed to read input");
+    usersraw
+        .split_whitespace()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+fn handle_client(stream: &mut TcpStream) -> io::Result<()> {
+    // Read 4-byte length header (little-endian)
+    let mut len_buf = [0u8; 4];
+    stream.read_exact(&mut len_buf)?;
+    let username_len = u32::from_le_bytes(len_buf);
+
+    // Validate length (max 15 bytes)
+    if username_len > 15 {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "Username exceeds 15-byte limit",
+        ));
+    }
+
+    // Read username bytes
+    let mut username_buf = vec![0u8; username_len as usize];
+    stream.read_exact(&mut username_buf)?;
+
+    // Convert to UTF-8 string
+    let connuser = String::from_utf8(username_buf)
+        .map_err(|_| io::Error::new(
+            ErrorKind::InvalidData,
+            "Invalid UTF-8 sequence",
+        ))?;
+
+    println!("Received user: {}", connuser);
+    Ok(())
+}
+
+fn tcplisten() -> bool {
+    let listener = TcpListener::bind("127.0.0.1:6996")?    let listener = TcpListener::bind("127.0.0.1:6996")?;
+
+    for stream in listener.incoming() {
+        let mut stream = stream?;
+        handle_client(&mut stream);
+    };
+    println!("Server listening on 127.0.0.1:6996");
+
+    for stream in listener.incoming() {
+        match stream {
+            Ok(mut stream) => {
+                if let Err(e) = handle_client(&mut stream) {
+                    eprintln!("Client error: {}", e);
+                }
+            }
+            Err(e) => eprintln!("Connection failed: {}", e),
+        }
+        false
+    }
+    true
+}
+
+fn tcpconnect(user: String) -> bool {
+    let file = match File::open("users.saved") {
+        Ok(file) => file,
+        Err(_) => return false,
+    };
+    let reader = BufReader::new(file);
+
+    let mut found: bool = false;
+
+    for line in reader.lines() {
+        let line = match line {
+            Ok(line) => line,
+            Err(_) => continue,
+        };
+
+        if line.starts_with('[') && line.ends_with(']') {
+            let content = &line[1..line.len() - 1];
+            let parts: Vec<&str> = content.split(',').map(str::trim).collect();
+
+            if parts.len() >= 2 {
+                let username = parts[0];
+                let ipaddress = parts[1];  // Saved in variable as requested
+                if username == user {
+                    // Start handshake
+                    //return true // temporary return true
+                    found = true;
+                }
+            }
+        }
+        println!("Failed to read line: {}", line)
+    }
+    if found{
+        //start handshake
+    }
+    false
+}
+
+fn main() {
+    let initout = initsetup();
+    println!("Users given: {:?}", initout);
+    if initout.len() == 0 {
+        println!("No users given, listening.");
+        if tcplisten() {
+            println!("Handshake done; Starting stream");
+        }
+    }
+    else{
+        for i in 0..initout.len() {
+            println!("Attempting to connect to user {}", initout[i]);
+            if tcpconnect(i.to_string()) {
+                println!("Handshake done; Starting stream");
+            }
+            println!("Could not connect to user.")
+        }
+    }
+}
