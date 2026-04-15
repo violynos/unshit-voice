@@ -1,0 +1,159 @@
+use std::net::{TcpListener, TcpStream};
+use std::io::{stdin, stdout, Write, Read, BufReader, BufRead, ErrorKind, self};
+use std::fs::File;
+use lazy_static::lazy_static;
+use std::sync::Mutex;
+
+lazy_static! {
+    static ref USERS: Mutex<Vec<Vec<String>>> = Mutex::new(Vec::new());
+}
+
+static MYUSER: &str = "vio";
+static IPSELF: &str = "10.147.19.13:6996";
+
+fn initsetup() -> Vec<String> {
+    let mut usersraw = String::new();
+    print!("Please input user(s) to connect to: ");
+    stdin().read_line(&mut usersraw).expect("Failed to read input");
+    usersraw
+        .split_whitespace()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+fn handle_client(stream: &mut TcpStream) -> io::Result<()> {
+    let mut len_buf = [0u8; 4];
+    stream.read_exact(&mut len_buf)?;
+    let username_len = u32::from_be_bytes(len_buf);
+
+    println!("{}",username_len);
+
+    if username_len > 15 {
+        return Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "Username exceeds 15-byte limit",
+        ));
+    }
+
+    let mut username_buf = vec![0u8; username_len as usize];
+    stream.read_exact(&mut username_buf)?;
+
+    let connuser = String::from_utf8(username_buf)
+        .map_err(|_| io::Error::new(
+            ErrorKind::InvalidData,
+            "Invalid UTF-8 sequence",
+        ))?;
+
+    println!("Received user: {}", connuser);
+    // send self packet to user
+    Ok(())
+}
+
+fn tcplisten() -> bool {
+    let listener = match TcpListener::bind(&IPSELF) {
+        Ok(listener) => listener,
+        Err(e) => {
+            eprintln!("Bind failed: {}", e);
+            return false;
+        }
+    };
+
+    println!("Server listening on {}",&IPSELF);
+
+    for stream in listener.incoming() {
+        match stream {
+            Ok(mut stream) => {
+                if let Err(e) = handle_client(&mut stream) {
+                    eprintln!("Client error: {}", e);
+                }
+            }
+            Err(e) => eprintln!("Connection failed: {}", e),
+        }
+    }
+    true
+}
+
+fn tcpconnect(user: String) -> io::Result<bool> {
+    let file = match File::open("src/users.saved") {
+        Ok(file) => file,
+        Err(_) => {return Ok(false)},
+    };
+    let reader = BufReader::new(file);
+
+    let mut found: bool = false;
+    
+    let i: &i8 = &0;
+    for line in reader.lines() {
+        let line = match line {
+            Ok(line) => line,
+            Err(_) => continue,
+        };
+
+        if line.starts_with('[') && line.ends_with(']') {
+            let content = &line[1..line.len() - 1];
+            let parts: Vec<&str> = content.split(',').map(str::trim).collect();
+
+            if parts.len() >= 2 {
+                let username: String = parts[0].to_string();
+                let ipaddress: String = parts[1].to_string();
+                let mut volume: String = parts[2].to_string();
+                let mut ssvolume: String = parts[3].to_string();
+                if username == user {
+                    found = true;
+                    {
+                        let mut vec = USERS.lock().unwrap();
+                        vec.push([username, ipaddress, volume, ssvolume].to_vec())
+                    }
+                    break;
+                }
+            }
+            let i = (i + 1) as i8;
+        }
+        else{println!("Failed to read line: {}", line)}
+    }
+    if found {
+        // handshake
+        let vec = USERS.lock().unwrap();
+        println!("{:?}", vec);
+        let mut stream = TcpStream::connect(&vec[0][1])?;
+
+        let username_bytes = MYUSER.as_bytes();
+        if username_bytes.len() > 15 {
+            return Err(io::Error::new(
+                ErrorKind::InvalidData,
+                "Username exceeds 15-byte limit",
+            ));
+        }
+
+        let len = username_bytes.len() as u32;
+        let len_bytes = len.to_be_bytes(); // Network byte order (big-endian)
+
+        stream.write_all(&len_bytes)?;
+        stream.write_all(username_bytes)?;
+
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn main() {
+    let initout = initsetup();
+    println!("Users given: {:?}", initout);
+    if initout.len() == 0 {
+        println!("No users given, listening.");
+        if tcplisten() {
+            println!("Handshake done; Starting stream");
+        }
+    }
+    else {
+        for i in 0..initout.len() {
+            println!("Attempting to connect to user {}", initout[i]);
+            match tcpconnect(initout[i].clone()) {
+                Ok(true) => println!("Handshake done; Starting stream"),
+                Ok(false) => println!("Could not connect to user."),
+                Err(e) => eprintln!("Connection error: {}", e),
+            }
+        }
+    }
+}
+

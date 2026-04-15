@@ -1,157 +1,59 @@
-use std::net::{TcpListener, TcpStream};
-use std::io::{stdin, stdout, Write, Read, BufReader, BufRead, ErrorKind, self};
-use std::fs::File;
+//  TO-DO
+//  
+//  test if 2 clients sending a 1080p screen simultaniously can be handled
+//  literally write thefucking program
+//  save "lcs" last corrrect screen for when recieving broken screen packets
+//  use multiple threads for encoding and decoding
+//
+
+
 use lazy_static::lazy_static;
 use std::sync::Mutex;
 
 lazy_static! {
-    static ref USERS: Mutex<Vec<Vec<String>>> = Mutex::new(Vec::new());
+    // USERS:
+    //  [ [user1,ip1,uservolume1,ssvolume1,lastpacket1],
+    //  [u2,i2,uv2,ssv2,lp2],
+    //  [...], ... ]
+    static ref USERS: Mutex<Vec<Vec<String>>> = Mutex::new(Vec::new));
 }
 
-static myuser: &str = "vio";
-static ipself: &str = "10.147.19.13:6996";
+// username that others use to refer to you
+static MYUSER: &str = "myun";
+// ip address for others to send packets to
+// currently working with port 6996, but you and your group could use a different one
+//static MYIP: &str = "myip:6996"; // replaced by lookieg in users.saved
 
-fn initsetup() -> Vec<String> {
-    let mut usersraw = String::new();
-    stdin().read_line(&mut usersraw).expect("Failed to read input");
-    usersraw
-        .split_whitespace()
-        .map(|s| s.to_string())
-        .collect()
+fn send_packet(puser: String, ptype: String, pvoice: String, pscreen: String, psaudio: String) {
+//  to pusers ip
+//  ptype, len of MYUSER, MYUSER, len of pvoice, [pvoice], len of psceen, [pscreen]
 }
 
-fn handle_client(stream: &mut TcpStream) -> io::Result<()> {
-    let mut len_buf = [0u8; 4];
-    stream.read_exact(&mut len_buf)?;
-    let username_len = u32::from_be_bytes(len_buf);
-
-    if username_len > 15 {
-        println!("{}",username_len);
-        return Err(io::Error::new(
-            ErrorKind::InvalidData,
-            "Username exceeds 15-byte limit",
-        ));
-    }
-
-    let mut username_buf = vec![0u8; username_len as usize];
-    stream.read_exact(&mut username_buf)?;
-
-    let connuser = String::from_utf8(username_buf)
-        .map_err(|_| io::Error::new(
-            ErrorKind::InvalidData,
-            "Invalid UTF-8 sequence",
-        ))?;
-
-    println!("Received user: {}", connuser);
-    // send self packet to user
-    Ok(())
+fn finduserdata(tuser: String) -> Vec<String> {
+//  n+=1
+//
+//  if n>14
+//      print error
+//      return garbage data
+//
+//  find user in users.saved
+//
+//  if found
+//      return Vec<ip, vol, ssvol>
+//      n=0
+//
+//  else 
+//      print save user to file and try again
+//      wait for input
+//      return finduserdata(tuser)
 }
 
-fn tcplisten() -> bool {
-    let listener = match TcpListener::bind(&ipself) {
-        Ok(listener) => listener,
-        Err(e) => {
-            eprintln!("Bind failed: {}", e);
-            return false;
-        }
-    };
-
-    println!("Server listening on {}",&ipself);
-
-    for stream in listener.incoming() {
-        match stream {
-            Ok(mut stream) => {
-                if let Err(e) = handle_client(&mut stream) {
-                    eprintln!("Client error: {}", e);
-                }
-            }
-            Err(e) => eprintln!("Connection failed: {}", e),
-        }
-    }
-    true
+fn handle_packet() {
+    //read first byte
+    //determine ptype to type and username lenght to userlen
+    //read userlen bytes to user
+    //match type to the types
+    //call handle_<type> based on match
 }
 
-fn tcpconnect(user: String) -> io::Result<bool> {
-    let file = match File::open("src/users.saved") {
-        Ok(file) => file,
-        Err(_) => {return Ok(false)},
-    };
-    let reader = BufReader::new(file);
-
-    let mut found: bool = false;
-    
-    let mut i: &i8 = &0;
-    for line in reader.lines() {
-        let line = match line {
-            Ok(line) => line,
-            Err(_) => continue,
-        };
-
-        if line.starts_with('[') && line.ends_with(']') {
-            let content = &line[1..line.len() - 1];
-            let parts: Vec<&str> = content.split(',').map(str::trim).collect();
-
-            if parts.len() >= 2 {
-                let username: String = parts[0].to_string();
-                let ipaddress: String = parts[1].to_string();
-                let mut volume: String = parts[2].to_string();
-                let mut ssvolume: String = parts[3].to_string();
-                if username == user {
-                    found = true;
-                    {
-                        let mut vec = USERS.lock().unwrap();
-                        vec.push([username, ipaddress, volume, ssvolume].to_vec())
-                    }
-                    break;
-                }
-            }
-            let mut i = (i + 1) as i8;
-        }
-        else{println!("Failed to read line: {}", line)}
-    }
-    if found {
-        // handshake
-        let vec = USERS.lock().unwrap();
-        println!("{:?}", vec);
-        let mut stream = TcpStream::connect(&vec[0][1])?;
-
-        let username_bytes = myuser.as_bytes();
-        if username_bytes.len() > 15 {
-            return Err(io::Error::new(
-                ErrorKind::InvalidData,
-                "Username exceeds 15-byte limit",
-            ));
-        }
-
-        let len = username_bytes.len() as u32;
-        let len_bytes = len.to_be_bytes(); // Network byte order (big-endian)
-
-        stream.write_all(&len_bytes)?;
-        stream.write_all(username_bytes)?;
-
-        return Ok(true);
-    }
-    Ok(false)
-}
-
-fn main() {
-    let initout = initsetup();
-    println!("Users given: {:?}", initout);
-    if initout.len() == 0 {
-        println!("No users given, listening.");
-        if tcplisten() {
-            println!("Handshake done; Starting stream");
-        }
-    }
-    else {
-        for i in 0..initout.len() {
-            println!("Attempting to connect to user {}", initout[i]);
-            match tcpconnect(initout[i].clone()) {
-                Ok(true) => println!("Handshake done; Starting stream"),
-                Ok(false) => println!("Could not connect to user."),
-                Err(e) => eprintln!("Connection error: {}", e),
-            }
-        }
-    }
-}
-
+fn 
